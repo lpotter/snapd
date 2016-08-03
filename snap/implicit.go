@@ -67,6 +67,7 @@ var implicitClassicSlots = []string{
 	"unity7",
 	"upower-observe",
 	"x11",
+    "sensors",
 }
 
 // AddImplicitSlots adds implicitly defined slots to a given snap.
