@@ -21,9 +21,12 @@ package snapstate
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/snapcore/snapd/arch"
+	"github.com/snapcore/snapd/cmd"
 	"github.com/snapcore/snapd/overlord/snapstate/backend"
 	"github.com/snapcore/snapd/overlord/state"
 	"github.com/snapcore/snapd/release"
@@ -42,14 +45,58 @@ var featureSet = map[string]bool{
 func checkAssumes(s *snap.Info) error {
 	missing := ([]string)(nil)
 	for _, flag := range s.Assumes {
+		if strings.HasPrefix(flag, "snapd") && checkVersion(flag[5:]) {
+			continue
+		}
 		if !featureSet[flag] {
 			missing = append(missing, flag)
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("snap %q assumes unsupported features: %s (try new ubuntu-core)", s.Name(), strings.Join(missing, ", "))
+		hint := "try to refresh the core snap"
+		if release.OnClassic {
+			hint = "try to update snapd and refresh the core snap"
+		}
+		return fmt.Errorf("snap %q assumes unsupported features: %s (%s)", s.Name(), strings.Join(missing, ", "), hint)
 	}
 	return nil
+}
+
+var versionExp = regexp.MustCompile(`^([1-9][0-9]*)(?:\.([0-9]+)(?:\.([0-9]+))?)?`)
+
+func checkVersion(version string) bool {
+	req := versionExp.FindStringSubmatch(version)
+	if req == nil || req[0] != version {
+		return false
+	}
+
+	if cmd.Version == "unknown" {
+		return true // Development tree.
+	}
+
+	cur := versionExp.FindStringSubmatch(cmd.Version)
+	if cur == nil {
+		return false
+	}
+
+	for i := 1; i < len(req); i++ {
+		if req[i] == "" {
+			return true
+		}
+		if cur[i] == "" {
+			return false
+		}
+		reqN, err1 := strconv.Atoi(req[i])
+		curN, err2 := strconv.Atoi(cur[i])
+		if err1 != nil || err2 != nil {
+			panic("internal error: version regexp is broken")
+		}
+		if curN != reqN {
+			return curN > reqN
+		}
+	}
+
+	return true
 }
 
 var openSnapFile = backend.OpenSnapFile
@@ -133,40 +180,50 @@ func checkCoreName(st *state.State, snapInfo, curInfo *snap.Info, flags Flags) e
 	return nil
 }
 
-func checkGadget(st *state.State, snapInfo, curInfo *snap.Info, flags Flags) error {
-	if snapInfo.Type != snap.TypeGadget {
+func checkGadgetOrKernel(st *state.State, snapInfo, curInfo *snap.Info, flags Flags) error {
+	kind := ""
+	var currentInfo func(*state.State) (*snap.Info, error)
+	switch snapInfo.Type {
+	case snap.TypeGadget:
+		kind = "gadget"
+		currentInfo = GadgetInfo
+	case snap.TypeKernel:
+		kind = "kernel"
+		currentInfo = KernelInfo
+	default:
 		// not a relevant check
 		return nil
 	}
+
 	if release.OnClassic {
 		// for the time being
-		return fmt.Errorf("cannot install a gadget snap on classic")
+		return fmt.Errorf("cannot install a %s snap on classic", kind)
 	}
 
-	currentGadget, err := GadgetInfo(st)
-	// in firstboot we have no gadget yet - that is ok
+	currentSnap, err := currentInfo(st)
+	// in firstboot we have no gadget/kernel yet - that is ok
 	// devicestate considers that case
 	if err == state.ErrNoState {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("cannot find original gadget snap: %v", err)
+		return fmt.Errorf("cannot find original %s snap: %v", kind, err)
 	}
 
-	if currentGadget.SnapID != "" && snapInfo.SnapID != "" {
-		if currentGadget.SnapID == snapInfo.SnapID {
+	if currentSnap.SnapID != "" && snapInfo.SnapID != "" {
+		if currentSnap.SnapID == snapInfo.SnapID {
 			// same snap
 			return nil
 		}
-		return fmt.Errorf("cannot replace gadget snap with a different one")
+		return fmt.Errorf("cannot replace %s snap with a different one", kind)
 	}
 
-	if currentGadget.SnapID != "" && snapInfo.SnapID == "" {
-		return fmt.Errorf("cannot replace signed gadget snap with an unasserted one")
+	if currentSnap.SnapID != "" && snapInfo.SnapID == "" {
+		return fmt.Errorf("cannot replace signed %s snap with an unasserted one", kind)
 	}
 
-	if currentGadget.Name() != snapInfo.Name() {
-		return fmt.Errorf("cannot replace gadget snap with a different one")
+	if currentSnap.Name() != snapInfo.Name() {
+		return fmt.Errorf("cannot replace %s snap with a different one", kind)
 	}
 
 	return nil
@@ -174,5 +231,5 @@ func checkGadget(st *state.State, snapInfo, curInfo *snap.Info, flags Flags) err
 
 func init() {
 	AddCheckSnapCallback(checkCoreName)
-	AddCheckSnapCallback(checkGadget)
+	AddCheckSnapCallback(checkGadgetOrKernel)
 }
