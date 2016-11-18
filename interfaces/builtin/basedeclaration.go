@@ -158,6 +158,11 @@ slots:
       slot-snap-type:
         - core
     deny-auto-connection: true
+  avahi-observe:
+    allow-installation:
+      slot-snap-type:
+        - core
+    deny-auto-connection: true
   bluetooth-control:
     allow-installation:
       slot-snap-type:
@@ -439,6 +444,11 @@ slots:
     allow-installation:
       slot-snap-type:
         - core
+  usb-raw:
+    allow-installation:
+      slot-snap-type:
+        - core
+    deny-auto-connection: true
   x11:
     allow-installation:
       slot-snap-type:
